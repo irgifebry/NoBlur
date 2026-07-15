@@ -35,7 +35,7 @@ describe("changelog module", () => {
     describe("getLatestVersion", () => {
         it("returns the first version from changelogData", () => {
             const version = getLatestVersion();
-            expect(version).toBe("2.5.0");
+            expect(version).toBe("2.6.0");
         });
     });
 
@@ -50,7 +50,7 @@ describe("changelog module", () => {
         });
 
         it("returns false when stored version matches latest", () => {
-            mockStorage["noblur-last-seen-version"] = "2.5.0";
+            mockStorage["noblur-last-seen-version"] = "2.6.0";
             expect(hasNewVersion()).toBe(false);
         });
 
@@ -80,14 +80,14 @@ describe("changelog module", () => {
         });
 
         it("renders version badge when user has seen current version", () => {
-            mockStorage["noblur-last-seen-version"] = "2.5.0";
+            mockStorage["noblur-last-seen-version"] = "2.6.0";
 
             const container = document.createElement("div");
             document.body.appendChild(container);
             initChangelog(container);
 
             const badge = container.querySelector(".changelog-badge");
-            expect(badge.textContent).toBe("v2.5.0");
+            expect(badge.textContent).toBe("v2.6.0");
             expect(badge.classList.contains("changelog-badge-version")).toBe(
                 true,
             );
