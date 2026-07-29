@@ -1,97 +1,118 @@
-# NoBlur — Post TikTok Videos Without the Blur
+# NoBlur
 
-NoBlur is a client-side web application that processes MP4 and MOV video containers locally in your browser to bypass aggressive server-side recompression when uploading to TikTok. It uses MP4 sample-table frame density inflation as its core bypass mechanism, with an optional 60fps VFI interpolation path. All processing stays on-device — no data is uploaded to external servers.
+Post TikTok videos without the blur. All processing happens in your browser — no data ever leaves your machine.
 
 ![Preview](preview.webp)
 
 ---
 
-## Technical Architecture
+## How It Works
 
-NoBlur runs two pipelines depending on the Interpolation toggle.
+Two modes:
 
-### Non-Interpolation Path (Frame Density Inflation)
+### 1. Inflate (Non-Interpolation) — Fast, 100% original quality
 
-The primary path for bypassing TikTok recompression. Inflates the MP4 sample table using pure binary manipulation — no FFmpeg re-encode, preserving 100% video quality with 10-100x faster processing.
+Main mode. No ffmpeg involved — directly manipulates MP4 file structure. What it does:
+- **10x** sample table inflation — TikTok sees high-density video, skips aggressive recompression
+- **100% original quality** — zero re-encode
+- **10-100x faster** than transcoding
 
-1. **Container Normalization:** Reorders the MP4 so `moov` atom precedes `mdat` (fast-start) and rewrites `ftyp` brand to `isom` for compatibility.
-2. **Frame Density Inflation:** Multiplies the sample table by 10x. Real frames are kept; codec-aware dummy samples are appended with `stts`/`stsz`/`stco`/`stsc` patched and padding written at EOF. Supports VFR, 64-bit chunk offsets (co64), and per-codec dummy sizes (avc1/avc3: 8B, hvc1/hev1: 16B, vp09/av01: 4B). TikTok reads the inflated frame count as high-density content and skips heavy recompression.
+Technical:
+- Reorders MP4 boxes (moov moved before mdat, ftyp rewritten to `isom`)
+- Sample table inflated 10x: stts/stsz/stco/stsc patched, small dummy samples (8-16 bytes per codec) appended at EOF
+- Codec-aware dummy sizes:
+  - H.264 (avc1/avc3): **8 bytes**
+  - H.265/HEVC (hvc1/hev1): **16 bytes**
+  - VP9 (vp09): **4 bytes**
+  - AV1 (av01): **4 bytes**
+  - MPEG-4 Visual (mp4v): **8 bytes**
+- Supports VFR, 64-bit chunk offsets (co64), MOV input
 
-### Interpolation Path (60fps VFI + Inflation Pipeline)
+### 2. VFI (Interpolation) — 60fps + Inflate
 
-When the Interpolation toggle is enabled, FFmpeg.wasm is lazy-loaded to run motion-compensated frame interpolation (`minterpolate`) to 60fps at the selected output resolution (1080p or 2K). Audio is copied without re-encoding (`-c:a copy`) for faster processing. The interpolated video then passes through the same frame density inflation pipeline. The FFmpeg instance is terminated after each video to prevent stale WASM state.
+Uses ffmpeg.wasm to interpolate frames to 60fps first, then inflate.
+
+Pipeline:
+1. Lazy-load ffmpeg.wasm (only when this mode is on)
+2. Filter: `mpdecimate,minterpolate=fps=60:mi_mode=mci:me_mode=$MODE:me=epzs:search_param=4:scd=none`
+   - Motion estimation mode: **bilat** (desktop) / **bidir** (mobile)
+3. Scale to chosen resolution (720/**1080**/1440)
+   - If 1440 picked: VFI processes at 1080 first, then upscales to 1440 using lanczos
+4. Encode with libx264, **CRF 20**, **preset ultrafast** (speed > quality)
+5. Audio copied directly (`-c:a copy`) — no re-encode
+6. Then passes through the same 10x inflate pipeline
+
+Settings:
+- Output resolution: **720p, 1080p, or 1440p (2K)**
+- Multi-thread if browser supports SharedArrayBuffer (HTTPS + COOP/COEP required)
+  - Threads auto: `max(1, floor(hardwareConcurrency / 2))`
+- Single-thread fallback if SAB unavailable (localhost or non-secure context)
+  - Shows warning: "Enable HTTPS/cross-origin isolation for faster processing"
+- FFmpeg instance terminated after each video
 
 ---
 
-## Key Features
+## Features
 
-- **Pure Container Inflation:** No FFmpeg re-encode in the main path — preserves 100% video quality, 10-100x faster than transcoding.
-- **TikTok Compression Bypass:** Codec-aware frame density inflation (10x default) makes videos pass TikTok's quality-preservation threshold. Works at both 1080p and 2K.
-- **Codec-Aware Inflation:** Per-codec dummy sample sizes (avc1/avc3: 8B, hvc1/hev1: 16B, vp09/av01: 4B), VFR support, and co64 for 64-bit chunk offsets.
-- **Single-Pass Pipeline:** Container normalization followed by sample-table inflation in one operation.
-- **Selectable Output Resolution:** 1080p or 2K (1440p) when interpolation is enabled. VFI processes at 1080p then upscales to 2K.
-- **Client-Side Only:** 100% browser-local. Zero server upload.
-- **Multi-Format & Codec Input:** MP4 and MOV with H.264, HEVC/H.265, and others.
-- **Bulk Processing Queue:** Drag/drop or select multiple videos; processed sequentially.
-- **Screen Wake Lock:** Keeps display active during processing; re-acquires on visibility change.
-- **TikTok Studio Shortcut:** One-click redirect to TikTok Studio with mobile desktop-mode guidance.
-- **Codec Detection Refactored:** Shared codec helpers in `mp4-boxes.mjs` eliminated duplication across modules.
-- **Binary Pipeline Tests:** Round-trip tests with real video fixtures (H.264, HEVC, co64, MOV, mdat-first) cover normalize + inflate + playable output.
-- **Fast-Start Container Fix:** Recalculates chunk offsets (`stco`/`co64`) on every structural shift.
-- **Neo-Brutalist Dark UI:** Flat offset shadows, solid dark panels, neon accents, responsive mobile layout.
-- **Local History:** IndexedDB with output-buffer thumbnails.
+| Feature | Detail |
+|---|---|
+| **100% client-side** | No upload. Private. |
+| **Supported files** | MP4 + MOV. Codecs: H.264, H.265/HEVC, VP9, AV1 |
+| **Bulk queue** | Drag/drop multiple files, processed sequentially |
+| **Multi-thread** | Uses SharedArrayBuffer + COOP/COEP |
+| **Single-thread fallback** | Works without SAB — just slower |
+| **Screen Wake Lock** | Keeps display awake during processing |
+| **History** | IndexedDB — click to re-download anytime |
+| **Thumbnail** | Captures frame at 0.1s (JPEG, max 120px) |
+| **Mobile responsive** | Layout adapts below 900px |
+| **Status log + copy** | Log output is copyable |
+| **Cancel button** | Stop processing anytime |
+| **TikTok Studio shortcut** | One-click redirect to TikTok Studio |
+
+### Timings
+
+| Constant | Value |
+|---|---|
+| Frame capture timeout | 5000ms |
+| Metadata timeout | 10000ms |
+| Progress fade duration | 400ms |
+| Batch interval | 600ms between videos |
 
 ---
 
 ## File Structure
 
-```text
+```
 NoBlur/
-├── ffmpeg-core/          # Single-thread FFmpeg WASM
-├── ffmpeg-core-mt/       # Multi-thread FFmpeg WASM (SAB)
-├── ffmpeg-worker/        # FFmpeg.wasm class worker
+├── ffmpeg-core/            # Single-thread FFmpeg WASM
+├── ffmpeg-core-mt/         # Multi-thread FFmpeg WASM (needs SAB)
+├── ffmpeg-worker/          # FFmpeg.wasm class worker
 ├── scripts/
 │   └── generate-changelog.mjs
 ├── src/
-│   ├── mp4-boxes.mjs     # MP4 atom parser + codec helpers
-│   ├── mp4-inflate.mjs   # Sample-table inflation logic
-│   ├── mp4-normalize.mjs # Container normalization (moov→mdat, ftyp)
-│   ├── changelog.mjs     # In-app changelog panel
-│   ├── changelog-data.mjs
-│   └── changelog.test.mjs
+│   ├── mp4-boxes.mjs       # MP4 atom parser + codec helpers
+│   ├── mp4-inflate.mjs     # Sample table inflation logic
+│   ├── mp4-normalize.mjs   # Container normalization (moov→mdat, ftyp)
+│   ├── changelog.mjs       # In-app changelog panel
+│   ├── changelog-data.mjs  # Changelog entries
+│   └── changelog.test.mjs  # Unit tests
 ├── test/
-│   ├── fixtures/         # Real MP4/MOV test vectors
+│   ├── fixtures/           # Real video files for testing
 │   ├── generate-fixtures.mjs
-│   └── pipeline.test.mjs # Binary pipeline round-trip tests
+│   └── pipeline.test.mjs   # Round-trip pipeline tests
 ├── index.html
-├── style.css
-├── app.js
-├── db.js                 # IndexedDB wrapper
-├── coi-serviceworker.js  # Cross-origin isolation for SAB
-├── .nojekyll             # Disable GitHub Pages Jekyll
+├── style.css               # Neo-brutalist dark UI
+├── app.js                  # Main app logic
+├── db.js                   # IndexedDB wrapper
+├── coi-serviceworker.js    # Cross-origin isolation
 ├── vite.config.js
 ├── package.json
 ├── biome.json
-├── README.md
-└── CHANGELOG.md
+└── README.md
 ```
-
----
-
-## Platform Notes
-
-| Platform | Deployment | FFmpeg VFI |
-|---|---|---|
-| Vercel | `npm build`, server COEP headers | Multi-thread (SAB) |
-| GitHub Pages | Deploy from branch, `.nojekyll`, COI service worker | Multi-thread (SAB) |
-| Local (dev) | `vite`, dev-server COEP headers | Multi-thread (SAB) |
-
-GitHub Pages serves files from the repo root directly (no Jekyll processing due to `.nojekyll`). Cross-origin isolation is provided by the COI service worker at `/coi-serviceworker.js`. If the service worker is still registering on first load, the page may not be immediately isolated — a page reload ensures it is active.
 
 ---
 
 ## Disclaimer
 
-This utility rewrites MP4 container metadata using sample-table inflation to bypass platform recompression. No video or audio data is re-encoded in the main pipeline, preserving original quality. The interpolation path (optional) uses FFmpeg.wasm for frame rate conversion only. Designed to work with valid MP4 and MOV containers. Always keep backups of your original video files before processing.
-
-See [CHANGELOG.md](./CHANGELOG.md) for the full release history.
+This tool rewrites MP4 container metadata using sample table inflation to bypass platform recompression. **No video/audio data is re-encoded** in the main pipeline — 100% original quality preserved. The VFI path (optional) only does frame rate conversion. Always keep backups of your original video files before processing.
